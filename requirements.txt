@@ -1,0 +1,3 @@
+# Python packages for CertiSniff. Install with:  pip install -r requirements.txt
+requests>=2.31,<3        # downloading tiles from CT logs
+cryptography>=42         # reading certificates (parser, test log); 42+ has the *_utc date fields
