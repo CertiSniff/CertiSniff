@@ -40,7 +40,8 @@ def parse_arguments():
     parser.add_argument("--log-url", default=ct_log.DEFAULT_LOG_URL,
                         help="monitoring URL of the log, ending in / (default: Sycamore 2027h1)")
     parser.add_argument("--output", default="data/raw",
-                        help="folder to save tiles in (default: data/raw)")
+                        help="where to save tiles: a folder or a bucket path like gs://my-bucket/raw "
+                             "(default: data/raw)")
     parser.add_argument("--progress", default="data/stream_progress.json",
                         help="this script's progress file (default: data/stream_progress.json)")
     parser.add_argument("--backfill-progress", default="data/backfill_progress.json",
@@ -81,7 +82,7 @@ def run_round(progress, args):
     bytes_this_round = 0
 
     for tile_number in range(first, newest + 1):
-        downloaded = ct_log.fetch_tile_to_disk(args.log_url, tile_number, args.output)
+        downloaded = ct_log.fetch_and_save_tile(args.log_url, tile_number, args.output)
         if downloaded:
             bytes_this_round += downloaded
             time.sleep(args.sleep)

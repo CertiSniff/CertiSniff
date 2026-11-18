@@ -1,0 +1,24 @@
+# certisniff-backfill.service - runs ingest/backfill.py until the backfill is complete.
+# Installed by deploy/install.sh, which fills in @USER@ and @REPO_DIR@.
+# Logs:  journalctl -u certisniff-backfill -f
+
+[Unit]
+Description=CertiSniff backfill: download the past N days of CT log tiles to GCS
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO_DIR@
+EnvironmentFile=/etc/default/certisniff
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@REPO_DIR@/.venv/bin/python ingest/backfill.py --days ${BACKFILL_DAYS} --output gs://${BUCKET}/raw
+# If it crashes (for example after a long network outage), start again after a
+# minute; it resumes from data/backfill_progress.json. When the backfill is
+# complete the script exits normally and is not restarted.
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

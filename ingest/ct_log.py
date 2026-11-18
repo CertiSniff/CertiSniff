@@ -17,8 +17,8 @@ Contents:
     last_full_tile()     number of the newest tile that has all 256 entries
     download_tile()      download one tile, with retries
     find_tile_at_time()  binary search for the tile that was logged at a given time
-    save_tile()          write a tile (gzip-compressed) into the local output folder
-    fetch_tile_to_disk() download + save in one step, skipping tiles already saved
+    save_tile()          save a tile, gzip-compressed, to a local folder or a GCS bucket
+    fetch_and_save_tile() download + save in one step, skipping tiles already saved
     load_progress() / save_progress()   small JSON file that lets scripts resume
 """
 
@@ -183,20 +183,51 @@ def find_tile_at_time(log_url, target_ms, newest_tile, sleep_seconds=0.2):
 
 
 # ---------------------------------------------------------------------------
-# Local storage
+# Storage: a local folder or a Google Cloud Storage (GCS) bucket
 # ---------------------------------------------------------------------------
+# The --output option of backfill.py and stream.py can be a local folder
+# ("data/raw") or a bucket path ("gs://my-bucket/raw"). Progress files always
+# stay on the local disk.
 
-def local_tile_file(output_folder, tile_number):
-    """Where a tile is stored locally. Mirrors the server path, plus ".bin.gz".
+_gcs_client = None  # created on first use, only when writing to GCS
 
-    Example: tile 1234567 -> <output_folder>/x001/x234/567.bin.gz
-    Each folder holds at most 1,000 files, which keeps folders fast to list.
+
+def is_gcs(location):
+    """True if location is a bucket path like "gs://my-bucket/raw"."""
+    return location.startswith("gs://")
+
+
+def _gcs_blob(gcs_path):
+    """Turn "gs://bucket/some/file" into a GCS blob (a handle to one file)."""
+    global _gcs_client
+    if _gcs_client is None:
+        # Imported here, not at the top, so local runs don't need the
+        # google-cloud-storage package or Google Cloud credentials.
+        from google.cloud import storage
+        _gcs_client = storage.Client()
+    bucket_name, _, object_name = gcs_path[len("gs://"):].partition("/")
+    return _gcs_client.bucket(bucket_name).blob(object_name)
+
+
+def tile_location(output, tile_number):
+    """Where a tile is stored. Mirrors the server path, plus ".bin.gz".
+
+    Examples for tile 1234567:
+        data/raw           -> data/raw/x001/x234/567.bin.gz
+        gs://my-bucket/raw -> gs://my-bucket/raw/x001/x234/567.bin.gz
+    Each folder holds at most 1,000 tiles, which keeps folders fast to list.
     """
-    return os.path.join(output_folder, tile_path(tile_number) + ".bin.gz")
+    relative_path = tile_path(tile_number) + ".bin.gz"
+    if is_gcs(output):
+        return output.rstrip("/") + "/" + relative_path
+    return os.path.join(output, relative_path)
 
 
-def tile_exists(output_folder, tile_number):
-    return os.path.exists(local_tile_file(output_folder, tile_number))
+def tile_exists(output, tile_number):
+    location = tile_location(output, tile_number)
+    if is_gcs(location):
+        return _gcs_blob(location).exists()
+    return os.path.exists(location)
 
 
 def _write_atomically(file_name, data, mode):
@@ -211,31 +242,46 @@ def _write_atomically(file_name, data, mode):
     os.replace(temporary_name, file_name)
 
 
-def save_tile(output_folder, tile_number, data):
-    """Save a tile gzip-compressed (about 2.4x smaller in our tests)."""
-    file_name = local_tile_file(output_folder, tile_number)
-    os.makedirs(os.path.dirname(file_name), exist_ok=True)
+def save_tile(output, tile_number, data):
+    """Save a tile gzip-compressed (about 2.4x smaller on real tiles)."""
     # Level 6 gives nearly the same size as the maximum (9) and is much faster.
-    _write_atomically(file_name, gzip.compress(data, compresslevel=6), "wb")
-    return file_name
+    compressed = gzip.compress(data, compresslevel=6)
+    location = tile_location(output, tile_number)
+    if is_gcs(location):
+        from google.cloud.storage.retry import DEFAULT_RETRY
+        # A GCS upload is all-or-nothing: the file appears only once it is
+        # complete, so no temporary file is needed. The library doesn't retry
+        # plain uploads by default; uploading the same bytes twice is harmless,
+        # so we ask it to retry.
+        _gcs_blob(location).upload_from_string(
+            compressed, content_type="application/gzip", retry=DEFAULT_RETRY)
+    else:
+        os.makedirs(os.path.dirname(location), exist_ok=True)
+        _write_atomically(location, compressed, "wb")
+    return location
 
 
-def read_saved_tile(output_folder, tile_number):
+def read_saved_tile(output, tile_number):
     """Read a saved tile back and return its uncompressed bytes."""
-    with gzip.open(local_tile_file(output_folder, tile_number), "rb") as f:
-        return f.read()
+    location = tile_location(output, tile_number)
+    if is_gcs(location):
+        compressed = _gcs_blob(location).download_as_bytes()
+    else:
+        with open(location, "rb") as f:
+            compressed = f.read()
+    return gzip.decompress(compressed)
 
 
-def fetch_tile_to_disk(log_url, tile_number, output_folder):
+def fetch_and_save_tile(log_url, tile_number, output):
     """Download a tile and save it, unless it's already saved.
 
-    Returns the number of bytes downloaded (0 if the tile was already on disk).
+    Returns the number of bytes downloaded (0 if the tile was already saved).
     Used by both backfill.py and stream.py.
     """
-    if tile_exists(output_folder, tile_number):
+    if tile_exists(output, tile_number):
         return 0
     data = download_tile(log_url, tile_number)
-    save_tile(output_folder, tile_number, data)
+    save_tile(output, tile_number, data)
     return len(data)
 
 

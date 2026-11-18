@@ -1,0 +1,23 @@
+# certisniff-stream.service - runs ingest/stream.py forever, downloading new tiles every 5 minutes.
+# Installed by deploy/install.sh, which fills in @USER@ and @REPO_DIR@.
+# Logs:  journalctl -u certisniff-stream -f
+
+[Unit]
+Description=CertiSniff stream: follow the CT log and save new tiles to GCS
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO_DIR@
+EnvironmentFile=/etc/default/certisniff
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@REPO_DIR@/.venv/bin/python ingest/stream.py --output gs://${BUCKET}/raw
+# Always come back after a crash or a VM reboot; it resumes from
+# data/stream_progress.json and catches up on missed tiles.
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -45,7 +45,8 @@ def parse_arguments():
     parser.add_argument("--days", type=float, default=5,
                         help="how many days back to start (default: 5; decimals allowed)")
     parser.add_argument("--output", default="data/raw",
-                        help="folder to save tiles in (default: data/raw)")
+                        help="where to save tiles: a folder or a bucket path like gs://my-bucket/raw "
+                             "(default: data/raw)")
     parser.add_argument("--progress", default="data/backfill_progress.json",
                         help="progress file used to resume (default: data/backfill_progress.json)")
     parser.add_argument("--max-tiles", type=int, default=0,
@@ -105,8 +106,8 @@ def download_range(progress, args):
                      args.max_tiles)
             break
 
-        # Skips tiles already on disk (e.g. downloaded just before a crash).
-        downloaded = ct_log.fetch_tile_to_disk(args.log_url, tile_number, args.output)
+        # Skips tiles already saved (e.g. downloaded just before a crash).
+        downloaded = ct_log.fetch_and_save_tile(args.log_url, tile_number, args.output)
         if downloaded:
             bytes_this_run += downloaded
             time.sleep(args.sleep)
